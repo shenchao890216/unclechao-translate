@@ -19,7 +19,6 @@ const saveError = ref('');
 
 interface ModelChoice {
   id: string;
-  label: string;
   note?: string;
 }
 
@@ -38,8 +37,8 @@ const providers: ProviderChoice[] = [
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     needsKey: true,
     models: [
-      { id: 'glm-4.7-flash', label: 'GLM-4.7 Flash', note: '免费' },
-      { id: 'glm-4-flash', label: 'GLM-4 Flash' },
+      { id: 'glm-4.7-flash', note: '免费' },
+      { id: 'glm-4-flash' },
     ],
   },
   {
@@ -48,8 +47,8 @@ const providers: ProviderChoice[] = [
     baseUrl: 'https://api.deepseek.com',
     needsKey: true,
     models: [
-      { id: 'deepseek-chat', label: 'DeepSeek Chat' },
-      { id: 'deepseek-flash', label: 'DeepSeek Flash' },
+      { id: 'deepseek-flash' },
+      { id: 'deepseek-v4-pro' },
     ],
   },
   {
@@ -58,8 +57,8 @@ const providers: ProviderChoice[] = [
     baseUrl: 'https://api.openai.com',
     needsKey: true,
     models: [
-      { id: 'gpt-4o-mini', label: 'GPT-4o mini' },
-      { id: 'gpt-4o', label: 'GPT-4o' },
+      { id: 'gpt-4o-mini' },
+      { id: 'gpt-4o' },
     ],
   },
   {
@@ -68,8 +67,9 @@ const providers: ProviderChoice[] = [
     baseUrl: 'https://api.moonshot.cn/v1',
     needsKey: true,
     models: [
-      { id: 'moonshot-v1-8k', label: 'Moonshot 8K' },
-      { id: 'moonshot-v1-32k', label: 'Moonshot 32K' },
+      { id: 'kimi-k2.6' },
+      { id: 'moonshot-v1-8k' },
+      { id: 'moonshot-v1-32k' },
     ],
   },
   {
@@ -177,7 +177,7 @@ function onProviderChange(event: Event) {
 function pickModel(model: ModelChoice) {
   customModel.value = false;
   form.model = model.id;
-  void persistLlm(`已切换为 ${model.label}`);
+  void persistLlm(`已切换为 ${model.id}`);
 }
 
 function useOtherModel() {
@@ -249,7 +249,7 @@ const inSidePanel = location.pathname.endsWith('sidepanel.html');
             :aria-pressed="isModelOn(model.id)"
             @click="pickModel(model)"
           >
-            <span>{{ model.label }}</span>
+            <span class="model-id">{{ model.id }}</span>
             <span v-if="model.note" class="note">{{ model.note }}</span>
           </button>
           <button type="button" :class="['model', { on: customModel }]" :aria-pressed="customModel" @click="useOtherModel">
@@ -388,6 +388,10 @@ h1 {
   border-color: #4f7cff;
   background: #f3f6ff;
   color: #1e3a8a;
+}
+.model-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
 }
 .model:focus-visible {
   outline: 2px solid #4f7cff66;
