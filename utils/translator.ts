@@ -1,4 +1,4 @@
-import { BATCH_TIMEOUT_MS, MAX_RETRIES } from './constants';
+import { BATCH_TIMEOUT_MS, MAX_RETRIES, RATE_LIMIT_RETRIES } from './constants';
 import { chatCompletion, isRetryable, LlmRequestError, toTranslateError } from './llm-client';
 import type { Settings, TranslateError } from './types';
 
@@ -17,7 +17,7 @@ export async function translateBatch(
   ];
 
   let lastError: TranslateError = { code: 'UNKNOWN', message: '未知错误' };
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  for (let attempt = 0; attempt <= RATE_LIMIT_RETRIES; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), BATCH_TIMEOUT_MS);
     try {
@@ -41,16 +41,22 @@ export async function translateBatch(
     } finally {
       clearTimeout(timer);
     }
-    if (attempt < MAX_RETRIES) {
-      await delay(backoffMs(attempt));
+    const retries = lastError.code === 'RATE_LIMIT' ? RATE_LIMIT_RETRIES : MAX_RETRIES;
+    if (attempt < retries) {
+      await delay(backoffMs(attempt, lastError));
+    } else {
+      break;
     }
   }
   throw new LlmRequestError(lastError.code, lastError.message);
 }
 
-/** 解析失败 / 网络 / 限流 / 超时重试：500ms、2s，带随机抖动 */
-function backoffMs(attempt: number): number {
-  return (500 * 4 ** attempt) + Math.floor(Math.random() * 250);
+/** 普通错误 500ms、2s。限流从 6 秒起翻倍，并尊重服务端 Retry-After */
+function backoffMs(attempt: number, error: TranslateError): number {
+  const base =
+    error.code === 'RATE_LIMIT' ? 6_000 * 2 ** attempt : 500 * 4 ** attempt;
+  const jitter = Math.floor(Math.random() * 400);
+  return Math.max(base + jitter, error.retryAfterMs ?? 0);
 }
 
 function delay(ms: number): Promise<void> {

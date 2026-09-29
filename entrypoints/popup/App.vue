@@ -42,10 +42,8 @@ async function setViewMode(mode: ViewMode) {
 }
 
 async function openOptions() {
-  const current = await browser.windows.getCurrent();
-  const sidePanel = (globalThis as { chrome?: { sidePanel?: { open: (options: { windowId: number }) => Promise<void> } } }).chrome?.sidePanel;
-  if (current.id != null && sidePanel) {
-    await sidePanel.open({ windowId: current.id });
+  const ok = await sendToActiveTab({ type: 'TOGGLE_SETTINGS' });
+  if (ok) {
     window.close();
     return;
   }

@@ -32,6 +32,16 @@ interface ProviderChoice {
 
 const providers: ProviderChoice[] = [
   {
+    id: 'mimo',
+    name: '小米 MiMo',
+    baseUrl: 'https://api.xiaomimimo.com/v1',
+    needsKey: true,
+    models: [
+      { id: 'mimo-v2.6-flash', note: '推荐' },
+      { id: 'mimo-v2.6-pro' },
+    ],
+  },
+  {
     id: 'zhipu',
     name: '智谱',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
@@ -216,12 +226,14 @@ function flash(message: string) {
   }, 2000);
 }
 
-/** 侧边栏顶栏已经显示扩展名，页内不再重复标题 */
+/** 侧边栏顶栏已经显示扩展名，页内不再重复标题。embed 是嵌在网页右侧的白栏 */
 const inSidePanel = location.pathname.endsWith('sidepanel.html');
+const embedded = new URLSearchParams(location.search).has('embed');
+if (embedded) document.documentElement.dataset.uctEmbed = '1';
 </script>
 
 <template>
-  <div class="panel" :class="{ docked: inSidePanel }">
+  <div class="panel" :class="{ docked: inSidePanel, embed: embedded }">
     <header v-if="!inSidePanel" class="head">
       <h1>设置</h1>
     </header>
@@ -268,7 +280,7 @@ const inSidePanel = location.pathname.endsWith('sidepanel.html');
           <input
             v-model="form.model"
             type="text"
-            :placeholder="activeProvider?.id === 'ollama' ? 'qwen2.5:7b' : 'glm-4.7-flash'"
+            :placeholder="activeProvider?.id === 'ollama' ? 'qwen2.5:7b' : 'mimo-v2.6-flash'"
             spellcheck="false"
             @change="persistLlm('已保存模型')"
           />
@@ -319,6 +331,10 @@ body {
   color: #1f2328;
   font-family: system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
+html[data-uct-embed],
+html[data-uct-embed] body {
+  background: #fff;
+}
 </style>
 
 <style scoped>
@@ -353,6 +369,9 @@ h1 {
 }
 .docked .body {
   padding-top: 16px;
+}
+.panel.embed .body {
+  padding-top: 40px;
 }
 .section {
   padding: 16px 0;

@@ -39,10 +39,46 @@ function isTranslateBatchRequest(msg: unknown): msg is TranslateBatchRequest {
   );
 }
 
+/** 智谱免费模型限流严，批与批之间留空档。小米等付费接口不插入这段等待。 */
+const FREE_TIER_GAP_MS = 2_000;
+let requestChain: Promise<void> = Promise.resolve();
+let notBefore = 0;
+
+function requestGapMs(baseUrl: string): number {
+  return /open\.bigmodel\.cn/i.test(baseUrl) ? FREE_TIER_GAP_MS : 0;
+}
+
+function enqueue<T>(gapMs: number, task: () => Promise<T>): Promise<T> {
+  const job = requestChain.then(async () => {
+    const wait = notBefore - Date.now();
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    try {
+      return await task();
+    } finally {
+      if (gapMs > 0) notBefore = Math.max(notBefore, Date.now() + gapMs);
+    }
+  });
+  requestChain = job.then(
+    () => undefined,
+    () => undefined,
+  );
+  return job;
+}
+
 async function handleTranslateBatch(items: string[]) {
   const settings = await loadSettings();
   if (!settings.llm.apiKey || !settings.llm.model) {
     throw new LlmRequestError('AUTH', '请先在设置页配置 API Key 和模型');
   }
-  return translateBatch(items, settings);
+  return enqueue(requestGapMs(settings.llm.baseUrl), () =>
+    keepWorkerAlive(() => translateBatch(items, settings)),
+  );
+}
+
+/** 外部 fetch 不算扩展 API，服务工作线程可能在回复前被挂起，通道随之关闭 */
+function keepWorkerAlive<T>(task: () => Promise<T>): Promise<T> {
+  const timer = setInterval(() => {
+    void browser.runtime.getPlatformInfo();
+  }, 15_000);
+  return task().finally(() => clearInterval(timer));
 }

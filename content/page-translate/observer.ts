@@ -66,7 +66,7 @@ function isHashOnlyChange(event: Event): boolean {
 }
 
 function isOwnNode(node: HTMLElement): boolean {
-  if (node.id === 'uct-page-notice' || node.id === 'uct-page-style') return true;
+  if (node.id === 'uct-page-notice' || node.id === 'uct-page-style' || node.id === 'uct-settings-host') return true;
   if (node.tagName === 'UCT-SELECTION-POPUP') return true;
   if (node.dataset.uctTargetId !== undefined || node.dataset.uctSelection !== undefined) return true;
   return !!node.closest('[data-uct-target-id], [data-uct-selection]');

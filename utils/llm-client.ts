@@ -8,17 +8,19 @@ export interface ChatMessage {
 
 export class LlmRequestError extends Error {
   readonly code: TranslateErrorCode;
+  readonly retryAfterMs?: number;
 
-  constructor(code: TranslateErrorCode, message: string) {
+  constructor(code: TranslateErrorCode, message: string, retryAfterMs?: number) {
     super(message);
     this.code = code;
     this.name = 'LlmRequestError';
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
 export function toTranslateError(err: unknown): TranslateError {
   if (err instanceof LlmRequestError) {
-    return { code: err.code, message: err.message };
+    return { code: err.code, message: err.message, retryAfterMs: err.retryAfterMs };
   }
   return { code: 'UNKNOWN', message: err instanceof Error ? err.message : String(err) };
 }
@@ -50,7 +52,10 @@ export async function chatCompletion(
         model: llm.model,
         temperature: 0.2,
         stream: false,
+        max_tokens: 4096,
         messages,
+        // 部分模型默认会思考，翻译只要译文，思考 token 还按输出计费
+        ...thinkingOffBody(llm),
       }),
       signal,
     });
@@ -67,7 +72,11 @@ export async function chatCompletion(
       throw new LlmRequestError('AUTH', 'API Key 无效或无权限');
     }
     if (response.status === 429) {
-      throw new LlmRequestError('RATE_LIMIT', '请求过于频繁，请稍后重试');
+      throw new LlmRequestError(
+        'RATE_LIMIT',
+        '请求过于频繁，请稍后重试',
+        retryAfterMs(response.headers.get('Retry-After')),
+      );
     }
     let detail = '';
     try {
@@ -90,4 +99,25 @@ export async function chatCompletion(
     throw new LlmRequestError('PARSE', '响应缺少 choices[0].message.content');
   }
   return content;
+}
+
+/** Retry-After 可能是秒数或 HTTP 日期，上限 60 秒 */
+function retryAfterMs(header: string | null): number | undefined {
+  if (!header) return undefined;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return Math.min(60_000, Math.max(0, seconds * 1000));
+  const at = Date.parse(header);
+  if (Number.isFinite(at)) return Math.min(60_000, Math.max(0, at - Date.now()));
+  return undefined;
+}
+
+/** 这些模型默认会思考。翻译只要译文。GLM-5.3 已不支持关闭，故不传。 */
+function thinkingOffBody(llm: LlmSettings): { thinking: { type: 'disabled' } } | Record<string, never> {
+  if (/^glm-4\.[5-9]/.test(llm.model)) {
+    return { thinking: { type: 'disabled' } };
+  }
+  if (/^mimo-/i.test(llm.model) || /xiaomimimo\.com/i.test(llm.baseUrl)) {
+    return { thinking: { type: 'disabled' } };
+  }
+  return {};
 }

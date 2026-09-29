@@ -9,8 +9,8 @@ import {
 import type { TextBlock } from '@/utils/types';
 
 /**
- * 分块并发翻译：切成批（≤20 条 / ≤3000 字符，超长块独立成批），
- * 并发池最多 3 个在途批；background 内部再做单批重试。
+ * 分块翻译：切成批（≤20 条 / ≤3000 字符，超长块独立成批），
+ * 同一轮只发一批；background 里还有全局排队，智谱免费接口批与批之间另留空档。
  * isCancelled 为真时不再发送后续批（响应到达的结果仍会渲染）。
  */
 export async function scheduleTranslation(

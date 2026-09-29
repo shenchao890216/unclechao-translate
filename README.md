@@ -43,7 +43,8 @@ pnpm build      # 产物在 .output/chrome-mv3
 
 | 服务 | Base URL | 模型示例 |
 |---|---|---|
-| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
+| 小米 MiMo | `https://api.xiaomimimo.com/v1` | `mimo-v2.6-flash` |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-flash` |
 | OpenAI | `https://api.openai.com` | `gpt-4o-mini` |
 | 智谱 | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash` |
 | Kimi | `https://api.moonshot.cn/v1` | `moonshot-v1-8k` |

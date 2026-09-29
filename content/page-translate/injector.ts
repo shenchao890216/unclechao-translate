@@ -93,7 +93,7 @@ export function injectFailurePlaceholder(block: TextBlock, reason: string): void
   placeholder.className = 'uct-failed';
   placeholder.dataset.uctTargetId = String(block.id);
   placeholder.setAttribute('translate', 'no');
-  placeholder.textContent = '翻译失败';
+  placeholder.textContent = formatFailureLabel(reason);
   placeholder.title = reason;
   placeSlot(block.host, placeholder);
   markHost(block);
@@ -168,6 +168,14 @@ export function showPageNotice(message: string, persistent = false): void {
   if (!persistent) {
     window.setTimeout(() => el.remove(), 4500);
   }
+}
+
+/** 页面上能直接看到的失败说明，完整原因仍放在 title 里 */
+export function formatFailureLabel(message: string): string {
+  const clean = message.replace(/\s+/g, ' ').trim();
+  if (!clean || clean === '翻译失败') return '翻译失败';
+  const short = clean.length > 60 ? `${clean.slice(0, 60)}…` : clean;
+  return `翻译失败：${short}`;
 }
 
 export function hidePageNotice(): void {

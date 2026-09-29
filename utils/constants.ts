@@ -5,9 +5,9 @@ import type { Settings } from './types';
 export const DEFAULT_SETTINGS: Settings = {
   version: 1,
   llm: {
-    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    baseUrl: 'https://api.xiaomimimo.com/v1',
     apiKey: '',
-    model: 'glm-4.7-flash',
+    model: 'mimo-v2.6-flash',
   },
   targetLang: '中文',
   selection: { enabled: true },
@@ -94,9 +94,11 @@ export const BLOCK_TAGS = new Set([
 
 export const MAX_ITEMS_PER_BATCH = 20;
 export const MAX_CHARS_PER_BATCH = 3000;
-export const MAX_CONCURRENCY = 3;
-export const BATCH_TIMEOUT_MS = 30_000;
+export const MAX_CONCURRENCY = 1;
+export const BATCH_TIMEOUT_MS = 60_000;
 export const MAX_RETRIES = 2;
+/** 限流时多等几轮，避免 500ms 后立刻重试把免费额度打满 */
+export const RATE_LIMIT_RETRIES = 3;
 
 // ---------- SPA 增量监测 ----------
 

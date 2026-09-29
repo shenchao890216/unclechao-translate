@@ -2,6 +2,7 @@ import { initSelectionDetector } from '@/content/selection/detector';
 import { fillSelectionError, fillSelectionResult, insertSelectionPending } from '@/content/selection/inline';
 import { createSelectionTranslateButton } from '@/content/selection/popup';
 import { PageTranslationController } from '@/content/page-translate/page-controller';
+import { toggleSettingsPanel } from '@/content/settings-panel';
 import { initPageObserver } from '@/content/page-translate/observer';
 import { isContentMessage, requestTranslateBatch } from '@/utils/messaging';
 import { loadSettings, onSettingsChanged } from '@/utils/settings';
@@ -20,6 +21,8 @@ export default defineContentScript({
       if (msg.type === 'TOGGLE_PAGE_TRANSLATE') {
         if (settings && !settings.page.enabled) return;
         pageController.toggle();
+      } else if (msg.type === 'TOGGLE_SETTINGS') {
+        toggleSettingsPanel();
       } else {
         pageController.setViewMode(msg.mode);
       }

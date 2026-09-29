@@ -34,6 +34,8 @@ export type TranslateErrorCode =
 export interface TranslateError {
   code: TranslateErrorCode;
   message: string;
+  /** 服务端 Retry-After，毫秒。仅限流时可能有 */
+  retryAfterMs?: number;
 }
 
 /** content → background：划词（单项数组）与整页（N 项数组）统一走此协议 */
@@ -50,6 +52,7 @@ export type TranslateBatchResponse =
 /** background → content：来自快捷键 / popup */
 export type ContentMessage =
   | { type: 'TOGGLE_PAGE_TRANSLATE' }
+  | { type: 'TOGGLE_SETTINGS' }
   | { type: 'SET_VIEW_MODE'; mode: ViewMode };
 
 // ---------- 整页翻译 ----------
