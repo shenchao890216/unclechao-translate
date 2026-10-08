@@ -1,14 +1,22 @@
 <script lang="ts" setup>
-import { onMounted, ref } from 'vue';
-import { sendToActiveTab } from '@/utils/messaging';
+import { computed, onMounted, ref } from 'vue';
+import { getActiveTab, sendToActiveTab } from '@/utils/messaging';
 import { loadSettings, saveSettings } from '@/utils/settings';
 import type { ViewMode } from '@/utils/types';
+import { isYouTubeWatchUrl } from '@/utils/youtube';
 
 const llmReady = ref(false);
 const pageEnabled = ref(true);
 const viewMode = ref<ViewMode>('dual');
 const busy = ref(false);
 const actionError = ref('');
+const pageShortcut = ref('');
+const videoShortcut = ref('');
+
+const pageButtonLabel = computed(() =>
+  busy.value ? '正在开启…' : withShortcut('切换整页翻译', pageShortcut.value),
+);
+const videoButtonLabel = computed(() => withShortcut('翻译 YouTube 字幕', videoShortcut.value));
 
 const viewModes: { mode: ViewMode; label: string }[] = [
   { mode: 'dual', label: '双语' },
@@ -17,11 +25,40 @@ const viewModes: { mode: ViewMode; label: string }[] = [
 ];
 
 onMounted(async () => {
-  const settings = await loadSettings();
+  const [settings, commands] = await Promise.all([loadSettings(), browser.commands.getAll()]);
   llmReady.value = Boolean(settings.llm.apiKey && settings.llm.model);
   pageEnabled.value = settings.page.enabled;
   viewMode.value = settings.page.viewMode;
+  pageShortcut.value = shortcutOf(commands, 'toggle-page-translate');
+  videoShortcut.value = shortcutOf(commands, 'toggle-video-translate');
 });
+
+function shortcutOf(commands: Browser.commands.Command[], name: string): string {
+  const shortcut = commands.find((command) => command.name === name)?.shortcut ?? '';
+  return shortcut.replaceAll('MacCtrl', 'Ctrl');
+}
+
+function withShortcut(label: string, shortcut: string): string {
+  return shortcut ? `${label}（${shortcut}）` : label;
+}
+
+async function toggleVideoTranslate() {
+  busy.value = true;
+  actionError.value = '';
+  const tab = await getActiveTab();
+  if (!isYouTubeWatchUrl(tab?.url)) {
+    busy.value = false;
+    actionError.value = '请先打开一个 YouTube 视频页。';
+    return;
+  }
+  const ok = await sendToActiveTab({ type: 'TOGGLE_VIDEO_TRANSLATE' });
+  busy.value = false;
+  if (!ok) {
+    actionError.value = '当前页面没有注入翻译脚本。请刷新 YouTube 页面后再试。';
+    return;
+  }
+  window.close();
+}
 
 async function togglePageTranslate() {
   busy.value = true;
@@ -71,7 +108,10 @@ async function openOptions() {
         :title="pageEnabled ? undefined : '整页翻译已在设置中关闭'"
         @click="togglePageTranslate"
       >
-        {{ busy ? '正在开启…' : '切换整页翻译（Alt+T）' }}
+        {{ pageButtonLabel }}
+      </button>
+      <button type="button" class="primary" :disabled="busy" @click="toggleVideoTranslate">
+        {{ videoButtonLabel }}
       </button>
     </div>
     <div v-if="actionError" class="error">{{ actionError }}</div>
@@ -127,6 +167,8 @@ header {
 }
 .actions {
   display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .primary {
   flex: 1;

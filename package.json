@@ -1,6 +1,6 @@
 {
   "name": "unclechao-translate",
-  "description": "基于 LLM 的划词翻译与整页双语翻译插件",
+  "description": "基于 LLM 的划词翻译、整页双语翻译与 YouTube 字幕翻译",
   "private": true,
   "version": "0.1.0",
   "type": "module",

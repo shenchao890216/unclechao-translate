@@ -1,6 +1,6 @@
 # UncleChao Translate
 
-基于 LLM 的自用 Chrome 翻译插件：划词翻译 + 整页双语翻译。
+基于 LLM 的自用 Chrome 翻译插件：划词翻译 + 整页双语翻译 + YouTube 字幕翻译。
 
 技术栈：[WXT](https://wxt.dev) + TypeScript + Vue 3（Manifest V3，仅支持 Chromium 系浏览器）。
 
@@ -19,6 +19,15 @@
 - 三种视图切换：双语 / 原文 / 译文（popup 快捷切换，记忆上次选择）
 - 支持 SPA：路由切换、滚动加载的新内容自动增量翻译
 - 代码块（`<pre>`/`<code>`）不翻译；中文内容自动跳过
+
+### YouTube 字幕
+
+- 在 `youtube.com/watch` 视频页按 `Alt+V`（或 popup 按钮）开关
+- 读取视频自带字幕（优先人工字幕），按播放进度提前翻译约 40 秒
+- 双语字幕盖在画面底部，全屏时跟着走；原文仍在，译文在下一行
+- 视图与整页翻译共用：双语 / 原文 / 译文
+- 当前字幕已经是目标语言时不请求模型
+- 不支持 Shorts，也不做语音识别和配音
 
 ## 安装使用
 
@@ -64,6 +73,7 @@ content script                    background (service worker)
 ```
 
 - content script 负责所有 DOM 编排（提取/分块/并发/注入）；background 只做无状态的"翻译一批文本"端点，每批一次短事务，不受 MV3 service worker 空闲回收影响
+- YouTube 字幕：主世界脚本截获播放器自己的字幕响应（带 `exp=xpe` 的地址直接请求会是空的），content script 按当前时间翻译；截不到完整稿时，改译画面上正在显示的那一句
 - 批量协议：`[{ id, text }]` 显式 id 对齐，每批 ≤20 条 / ≤3000 字符，并发最多 3，指数退避重试 2 次
 - 译文注入全程 `textContent` 赋值，杜绝 LLM 输出造成的页面注入
 - SPA 增量：MutationObserver（去抖 300ms，过滤自家注入）+ `wxt:locationchange` 路由兜底
@@ -78,4 +88,4 @@ content script                    background (service worker)
 
 ## 明确不做（MVP 边界）
 
-TTS、输入框翻译、Firefox 兼容、多翻译引擎切换、PDF/字幕翻译、翻译历史、上下文菜单、自动翻译整站、页面黑名单。
+TTS、输入框翻译、Firefox 兼容、多翻译引擎切换、PDF、YouTube 以外的字幕、翻译历史、上下文菜单、自动翻译整站、页面黑名单。

@@ -1,4 +1,4 @@
-import { SCROLL_TRANSLATE_DEBOUNCE_MS } from '@/utils/constants';
+import { BLOCK_MIN_LENGTH, SCROLL_TRANSLATE_DEBOUNCE_MS } from '@/utils/constants';
 import type { TextBlock, ViewMode } from '@/utils/types';
 import { extractBlocks } from './extractor';
 import {
@@ -8,6 +8,8 @@ import {
   hidePageNotice,
   injectPageStyles,
   injectTranslation,
+  removePageSlot,
+  removePendingPageSlot,
   showPageNotice,
   showTranslatingPlaceholder,
 } from './injector';
@@ -29,6 +31,8 @@ export class PageTranslationController {
   private inflight = new Set<string>();
   /** 同一句已经在请求中时，后出现的宿主等结果回来再注入 */
   private waiters = new Map<string, TextBlock[]>();
+  /** 划词正在译或已经译过的原文。整页翻译碰到就让开 */
+  private selectionTexts = new Set<string>();
   /** 当前还有几批视口翻译在请求，用于开关「正在翻译…」 */
   private noticeDepth = 0;
   private scrollTimer: number | undefined;
@@ -55,6 +59,40 @@ export class PageTranslationController {
     } else {
       void this.start();
     }
+  }
+
+  /**
+   * 划词开始翻译这段。先撤掉整页的「翻译中…」，
+   * 避免同一段原文再挂一份整页译文。
+   */
+  holdSelection(text: string): void {
+    const needle = compactText(text);
+    if (!needle) return;
+    this.selectionTexts.add(needle);
+    this.holdCovered(needle, false);
+  }
+
+  /** 划词成功：这段不再进入整页翻译，已注入的整页译文也撤掉 */
+  finishSelection(text: string): void {
+    const needle = compactText(text);
+    if (!needle) return;
+    this.selectionTexts.add(needle);
+    this.holdCovered(needle, true);
+  }
+
+  /** 划词失败：把让出去的整页块还回来 */
+  releaseSelection(text: string): void {
+    const needle = compactText(text);
+    if (!needle) return;
+    this.selectionTexts.delete(needle);
+    for (const block of this.blocks) {
+      if (!selectionCoversBlock(needle, block.sourceText)) continue;
+      block.hold = this.coveredBySelection(block.sourceText);
+      if (!block.hold && !hasRenderedTranslation(block.host) && block.state !== 'failed') {
+        block.state = 'pending';
+      }
+    }
+    if (this.active) this.flushReached();
   }
 
   /** SPA 增量：新节点先入队，只有已经滚到视口附近的才翻译 */
@@ -114,7 +152,7 @@ export class PageTranslationController {
     if (!this.active) return;
     const due: TextBlock[] = [];
     for (const block of this.blocks) {
-      if (block.state !== 'pending') continue;
+      if (block.hold || block.state !== 'pending') continue;
       if (!block.host.isConnected || !isInTranslatedRange(block.host)) continue;
       block.state = 'translating';
       due.push(block);
@@ -129,7 +167,6 @@ export class PageTranslationController {
 
     this.noticeDepth++;
     if (this.noticeDepth === 1) showPageNotice('正在翻译…', true);
-    for (const block of fresh) showTranslatingPlaceholder(block);
     try {
       await this.translate(fresh);
     } finally {
@@ -155,6 +192,7 @@ export class PageTranslationController {
     for (const root of roots) {
       const found = extractBlocks(root, this.nextId);
       this.nextId += found.length;
+      for (const block of found) this.claimSelection(block);
       blocks.push(...found);
     }
     return blocks;
@@ -170,6 +208,10 @@ export class PageTranslationController {
       }
       if (hasRenderedTranslation(block.host)) {
         block.state = 'done';
+        continue;
+      }
+      if (block.hold || this.coveredBySelection(block.sourceText)) {
+        this.claimSelection(block);
         continue;
       }
       const cached = this.cache.get(block.sourceText);
@@ -213,16 +255,58 @@ export class PageTranslationController {
     );
   }
 
+  private holdCovered(needle: string, finished: boolean): void {
+    for (const block of this.blocks) {
+      if (!selectionCoversBlock(needle, block.sourceText)) continue;
+      block.hold = true;
+      if (finished) {
+        block.state = 'done';
+        removePageSlot(block.host);
+      } else {
+        removePendingPageSlot(block.host);
+      }
+    }
+  }
+
+  private claimSelection(block: TextBlock): void {
+    if (!this.coveredBySelection(block.sourceText)) return;
+    block.hold = true;
+    block.state = 'done';
+    removePendingPageSlot(block.host);
+  }
+
+  private coveredBySelection(sourceText: string): boolean {
+    for (const needle of this.selectionTexts) {
+      if (selectionCoversBlock(needle, sourceText)) return true;
+    }
+    return false;
+  }
+
   private remember(sourceText: string, translated: string): void {
     this.cache.set(sourceText, translated);
     this.inflight.delete(sourceText);
     const waiting = this.waiters.get(sourceText) ?? [];
     this.waiters.delete(sourceText);
     for (const block of waiting) {
-      if (!block.host.isConnected || hasRenderedTranslation(block.host)) continue;
-      block.state = 'done';
-      block.translatedText = translated;
-      injectTranslation(block, translated);
+        if (block.hold || !block.host.isConnected || hasRenderedTranslation(block.host)) continue;
+        block.state = 'done';
+        block.translatedText = translated;
+        injectTranslation(block, translated);
     }
   }
+}
+
+function compactText(text: string): string {
+  return text.replace(/\s+/g, '');
+}
+
+/** 划词原文已经覆盖这块时，整页不再译。只划了其中几个字时，其余仍交给整页 */
+function selectionCoversBlock(selection: string, block: string): boolean {
+  const picked = compactText(selection);
+  const source = compactText(block);
+  if (!picked || !source) return false;
+  if (picked.includes(source)) return true;
+  if (!source.includes(picked)) return false;
+  const leftover = source.length - picked.length;
+  return leftover < BLOCK_MIN_LENGTH || picked.length >= source.length * 0.85;
 }

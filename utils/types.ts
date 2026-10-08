@@ -38,10 +38,14 @@ export interface TranslateError {
   retryAfterMs?: number;
 }
 
+/** 整页/划词用 page；YouTube 字幕用 subtitle，system prompt 不同 */
+export type TranslateKind = 'page' | 'subtitle';
+
 /** content → background：划词（单项数组）与整页（N 项数组）统一走此协议 */
 export interface TranslateBatchRequest {
   type: 'TRANSLATE_BATCH';
   items: string[];
+  kind?: TranslateKind;
 }
 
 /** results 与 items 等长对齐，null 表示该条失败（降级显示） */
@@ -49,9 +53,24 @@ export type TranslateBatchResponse =
   | { ok: true; results: (string | null)[] }
   | { ok: false; error: TranslateError };
 
+/**
+ * 网页播放器里的 timedtext 地址带 exp=xpe 时正文是空的。
+ * 改由 background 用安卓客户端接口拿一份能解析的字幕。
+ */
+export interface FetchYouTubeCaptionsRequest {
+  type: 'FETCH_YOUTUBE_CAPTIONS';
+  videoId: string;
+  languageCode: string;
+}
+
+export type FetchYouTubeCaptionsResponse =
+  | { ok: true; text: string }
+  | { ok: false; error: string };
+
 /** background → content：来自快捷键 / popup */
 export type ContentMessage =
   | { type: 'TOGGLE_PAGE_TRANSLATE' }
+  | { type: 'TOGGLE_VIDEO_TRANSLATE' }
   | { type: 'TOGGLE_SETTINGS' }
   | { type: 'SET_VIEW_MODE'; mode: ViewMode };
 
@@ -65,4 +84,6 @@ export interface TextBlock {
   sourceText: string;
   state: 'pending' | 'translating' | 'done' | 'failed';
   translatedText?: string;
+  /** 划词已经在译或译过这段，整页翻译不再注入 */
+  hold?: boolean;
 }

@@ -1,14 +1,26 @@
 import { sendToActiveTab } from '@/utils/messaging';
 import { loadSettings } from '@/utils/settings';
 import { translateBatch } from '@/utils/translator';
+import { fetchYouTubeCaptionText } from '@/utils/youtube-captions';
 import { LlmRequestError } from '@/utils/llm-client';
-import type { TranslateBatchRequest } from '@/utils/types';
+import type { FetchYouTubeCaptionsRequest, TranslateBatchRequest, TranslateKind } from '@/utils/types';
 
 export default defineBackground(() => {
   // content script 的翻译请求：每批一次短事务，SW 按需唤醒
   browser.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (isFetchYouTubeCaptionsRequest(msg)) {
+      keepWorkerAlive(() => fetchYouTubeCaptionText(msg.videoId, msg.languageCode))
+        .then((text) => sendResponse({ ok: true, text }))
+        .catch((err) =>
+          sendResponse({
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      return true;
+    }
     if (!isTranslateBatchRequest(msg)) return;
-    handleTranslateBatch(msg.items)
+    handleTranslateBatch(msg.items, msg.kind === 'subtitle' ? 'subtitle' : 'page')
       .then((results) => sendResponse({ ok: true, results }))
       .catch((err) =>
         sendResponse({
@@ -26,9 +38,21 @@ export default defineBackground(() => {
   browser.commands.onCommand.addListener((command) => {
     if (command === 'toggle-page-translate') {
       void sendToActiveTab({ type: 'TOGGLE_PAGE_TRANSLATE' });
+    } else if (command === 'toggle-video-translate') {
+      void sendToActiveTab({ type: 'TOGGLE_VIDEO_TRANSLATE' });
     }
   });
 });
+
+function isFetchYouTubeCaptionsRequest(msg: unknown): msg is FetchYouTubeCaptionsRequest {
+  if (typeof msg !== 'object' || msg === null) return false;
+  const request = msg as { type?: unknown; videoId?: unknown; languageCode?: unknown };
+  return (
+    request.type === 'FETCH_YOUTUBE_CAPTIONS' &&
+    typeof request.videoId === 'string' &&
+    typeof request.languageCode === 'string'
+  );
+}
 
 function isTranslateBatchRequest(msg: unknown): msg is TranslateBatchRequest {
   return (
@@ -65,13 +89,13 @@ function enqueue<T>(gapMs: number, task: () => Promise<T>): Promise<T> {
   return job;
 }
 
-async function handleTranslateBatch(items: string[]) {
+async function handleTranslateBatch(items: string[], kind: TranslateKind) {
   const settings = await loadSettings();
   if (!settings.llm.apiKey || !settings.llm.model) {
     throw new LlmRequestError('AUTH', '请先在设置页配置 API Key 和模型');
   }
   return enqueue(requestGapMs(settings.llm.baseUrl), () =>
-    keepWorkerAlive(() => translateBatch(items, settings)),
+    keepWorkerAlive(() => translateBatch(items, settings, kind)),
   );
 }
 

@@ -7,6 +7,7 @@ import {
   SKIP_TAGS,
 } from '@/utils/constants';
 import type { TextBlock } from '@/utils/types';
+import { isSelectionTranslatedText } from '@/content/selection/inline';
 import { hasTranslationSlot } from './injector';
 
 /** 超过该长度的块直接截断（防超出模型上下文） */
@@ -59,12 +60,20 @@ export function extractBlocks(root: Element, startId: number): TextBlock[] {
   visit(root);
   return blocks;
 
-  /** 长度达标、含字母、非中文为主 */
+  /** 长度达标、含字母、像正文、非中文为主 */
   function qualifies(text: string): boolean {
     if (text.length < BLOCK_MIN_LENGTH) return false;
     if (!/[\p{L}]/u.test(text)) return false;
+    if (isChromeText(text)) return false;
     return cjkRatio(text) <= CJK_RATIO_THRESHOLD;
   }
+}
+
+/** 划词已经译过的原文不再送进整页翻译 */
+function acceptSourceText(node: Node): number {
+  if (!(node instanceof Text) || !node.textContent?.trim()) return NodeFilter.FILTER_SKIP;
+  if (isSelectionTranslatedText(node)) return NodeFilter.FILTER_REJECT;
+  return NodeFilter.FILTER_ACCEPT;
 }
 
 function cjkRatio(text: string): number {
@@ -88,8 +97,189 @@ function shouldPrune(el: Element): boolean {
   // 只在译文还在时跳过。滚动 / hydration 常把译文节点摘掉但留下宿主，
   // 若仅凭 data-uct-src-id 剪枝，这段文字会一直缺译文。
   if (hasTranslationSlot(el)) return true;
+  if (isSiteChrome(el)) return true;
+  if (isSiteNav(el)) return true;
+  if (isBreadcrumb(el)) return true;
   if (isCssHidden(el)) return true;
   return false;
+}
+
+/**
+ * 账号、话题、阅读量、时间、语言切换和登录入口整段出现时不是正文。
+ * 无空格的普通单词（如一句推文 "Hello"）仍翻译；带数字或下划线的标识才跳过。
+ * 句子里的 Login / English 仍翻译，只有整段就是这些词才跳过。
+ */
+function isChromeText(text: string): boolean {
+  if (isSocialTokenRun(text)) return true;
+  if (isBareIdentifier(text)) return true;
+  if (isMetric(text)) return true;
+  if (isTimestamp(text)) return true;
+  if (isUtilityRun(text)) return true;
+  return false;
+}
+
+/** 语言切换和账号入口。长的放前面，避免 "sign" 吃掉 "sign in"。 */
+const UTILITY_LABELS = [
+  'bahasa indonesia',
+  'bahasa melayu',
+  'tiếng việt',
+  '简体中文',
+  '繁體中文',
+  'português',
+  'español',
+  'français',
+  'italiano',
+  'nederlands',
+  'українська',
+  'русский',
+  '日本語',
+  '한국어',
+  'العربية',
+  'עברית',
+  'हिन्दी',
+  'ไทย',
+  '中文',
+  'select language',
+  'change language',
+  'choose language',
+  'sign out',
+  'sign in',
+  'sign up',
+  'log out',
+  'log in',
+  'languages',
+  'language',
+  'english',
+  'deutsch',
+  'polski',
+  'svenska',
+  'dansk',
+  'suomi',
+  'norsk',
+  'čeština',
+  'magyar',
+  'română',
+  'ελληνικά',
+  'türkçe',
+  'logout',
+  'signup',
+  'login',
+  'register',
+].sort((a, b) => b.length - a.length);
+
+function isUtilityRun(text: string): boolean {
+  let rest = text.replace(/[▾▼▸►›]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!rest) return false;
+  let matched = 0;
+  while (rest) {
+    const label = UTILITY_LABELS.find((item) => rest === item || rest.startsWith(`${item} `));
+    if (!label) return false;
+    rest = rest.slice(label.length).trim();
+    matched += 1;
+    if (matched > 4) return false;
+  }
+  return true;
+}
+
+function isSocialTokenRun(text: string): boolean {
+  const parts = text.split(/\s+/);
+  return parts.every(
+    (part) => /^@[\p{L}\p{N}_.]{1,50}$/u.test(part) || /^#[\p{L}\p{N}_]{1,80}$/u.test(part),
+  );
+}
+
+function isBareIdentifier(text: string): boolean {
+  if (text.length > 40 || /\s/u.test(text)) return false;
+  return /^[\p{L}\p{N}_]+$/u.test(text) && /[\d_]/u.test(text);
+}
+
+function isMetric(text: string): boolean {
+  return /^(?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(?:\s*[kmb])?(?:\s+(?:views?|reposts?|repl(?:y|ies)|likes?|quotes?|bookmarks?|shares?))?$/i.test(
+    text,
+  );
+}
+
+const MONTH = 'jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec';
+const SHORT_DATE = new RegExp(
+  `^(?:(?:${MONTH})[a-z]*\\.?\\s+\\d{1,2}|\\d{1,2}\\s+(?:${MONTH})[a-z]*\\.?)(?:,?\\s+\\d{4})?$`,
+  'i',
+);
+
+function isTimestamp(text: string): boolean {
+  if (/^\d{1,3}\s*[smhdw]$/i.test(text)) return true;
+  if (/^\d+\s+(?:sec|second|min|minute|hr|hour|day|week|month|year)s?\s+ago$/i.test(text)) return true;
+  return SHORT_DATE.test(text);
+}
+
+/** X / Twitter 上显示名、转发来源、阅读量和互动数字。class 会变，只用稳定属性。 */
+const X_CHROME_SELECTOR = [
+  '[data-testid="User-Name"]',
+  '[data-testid="socialContext"]',
+  'a[href*="/analytics"]',
+  '[data-testid="app-text-transition-container"]',
+].join(',');
+
+function isSiteChrome(el: Element): boolean {
+  const host = location.hostname.replace(/^www\./, '');
+  if (host !== 'x.com' && host !== 'twitter.com' && !host.endsWith('.twitter.com')) return false;
+  return el.matches(X_CHROME_SELECTOR);
+}
+
+/**
+ * 站点顶栏：Home / Posts / About 这种导航，以及旁边的站名。
+ * 文章内部的 header、目录不在这里跳过。
+ */
+function isSiteNav(el: Element): boolean {
+  if (el.closest('article, main, [role="main"]')) return false;
+  if (el.tagName === 'NAV' || el.getAttribute('role') === 'navigation') return true;
+  if (el.tagName === 'HEADER' || el.getAttribute('role') === 'banner') return isShortLinkBar(el);
+  return false;
+}
+
+/** 顶栏里几乎只有短链接，没有标题或正文 */
+function isShortLinkBar(el: Element): boolean {
+  const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+  if (!text || text.length > 160) return false;
+  const links = [...el.querySelectorAll('a')].filter((link) => (link.textContent ?? '').trim());
+  if (links.length < 2) return false;
+  return links.every((link) => {
+    const label = (link.textContent ?? '').replace(/\s+/g, ' ').trim();
+    return label.length <= 32 && !/[.!?。！？]/.test(label);
+  });
+}
+
+/** 面包屑路径。正文标题还会单独出现，这里只跳过这条中导航。 */
+function isBreadcrumb(el: Element): boolean {
+  const hint = [
+    el.getAttribute('aria-label') ?? '',
+    el.getAttribute('class') ?? '',
+    el.id ?? '',
+    el.getAttribute('data-testid') ?? '',
+    el.getAttribute('itemtype') ?? '',
+  ].join(' ');
+  if (/breadcrumb/i.test(hint)) return true;
+  return looksLikeBreadcrumb(el);
+}
+
+function looksLikeBreadcrumb(el: Element): boolean {
+  const children = [...el.children];
+  if (children.length < 2 || children.length > 12) return false;
+  const hasSeparator = [...el.childNodes].some((node) => {
+    if (node instanceof Element) return isBreadcrumbSeparator(node);
+    return node.nodeType === Node.TEXT_NODE && /[>›»]| \/\s/.test(node.textContent ?? '');
+  });
+  if (!hasSeparator) return false;
+  const items = children.filter((child) => !isBreadcrumbSeparator(child) && (child.textContent ?? '').trim());
+  if (items.length < 2 || items.length > 6) return false;
+  if (items.some((item) => (item.textContent ?? '').replace(/\s+/g, ' ').trim().length > 90)) return false;
+  const linked = items.filter((item) => item.matches('a') || item.querySelector('a')).length;
+  return linked >= items.length - 1;
+}
+
+function isBreadcrumbSeparator(el: Element): boolean {
+  const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+  if (/^[>›»/|·•–—-]$/.test(text)) return true;
+  return !text && (el.tagName === 'SVG' || !!el.querySelector('svg'));
 }
 
 /**
@@ -133,9 +323,7 @@ function collectLeafText(el: Element): string {
   const parts: string[] = [];
   const walker = document.createTreeWalker(el, NodeFilter.SHOW_ALL, {
     acceptNode(node) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        return node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
-      }
+      if (node.nodeType === Node.TEXT_NODE) return acceptSourceText(node);
       if (node.nodeType === Node.ELEMENT_NODE) {
         if (shouldPrune(node as Element)) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_SKIP;
@@ -156,9 +344,7 @@ function collectDirectText(el: Element, excluded: Set<Element>): string {
   const parts: string[] = [];
   const walker = document.createTreeWalker(el, NodeFilter.SHOW_ALL, {
     acceptNode(node) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        return node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
-      }
+      if (node.nodeType === Node.TEXT_NODE) return acceptSourceText(node);
       if (node.nodeType === Node.ELEMENT_NODE) {
         const element = node as Element;
         if (shouldPrune(element) || excluded.has(element)) return NodeFilter.FILTER_REJECT;

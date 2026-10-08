@@ -10,9 +10,14 @@ import type { Settings, TranslateError } from './types';
 export async function translateBatch(
   items: string[],
   settings: Settings,
+  kind: 'page' | 'subtitle' = 'page',
 ): Promise<(string | null)[]> {
+  const systemPrompt =
+    kind === 'subtitle'
+      ? buildSubtitleSystemPrompt(settings.targetLang)
+      : buildSystemPrompt(settings.targetLang);
   const messages = [
-    { role: 'system' as const, content: buildSystemPrompt(settings.targetLang) },
+    { role: 'system' as const, content: systemPrompt },
     { role: 'user' as const, content: JSON.stringify(items) },
   ];
 
@@ -61,6 +66,21 @@ function backoffMs(attempt: number, error: TranslateError): number {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 连续口播：条数不能并，但术语和人称要前后一致 */
+function buildSubtitleSystemPrompt(targetLang: string): string {
+  return [
+    `你是视频字幕翻译。用户会发送按播放顺序排列的 JSON 字符串数组，请把每句口播翻译成${targetLang}。`,
+    '严格遵守：',
+    '1. 只输出 JSON 数组本身，不要 markdown 代码块，不要任何解释或前后缀文字。',
+    '2. 输出数组的长度和顺序必须与输入完全一致。',
+    '3. 每句单独对应一条译文，不要合并或拆分。前后句的术语、人称保持一致。',
+    '4. 译文要像字幕：短、口语、能跟上语速。不要补充原文没有的解释。',
+    '5. 人名和专有名词可保留原文或用通用译名，同一批内必须统一。',
+    '6. 纯音乐、掌声等无对白标记（如 [Music]）原样返回。',
+    `7. 若某句已是${targetLang}，原样返回。`,
+  ].join('\n');
 }
 
 function buildSystemPrompt(targetLang: string): string {

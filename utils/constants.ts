@@ -94,6 +94,8 @@ export const BLOCK_TAGS = new Set([
 
 export const MAX_ITEMS_PER_BATCH = 20;
 export const MAX_CHARS_PER_BATCH = 3000;
+/** 每轮调度的第一批只发这么多条，让视口顶部先出译文 */
+export const FIRST_BATCH_ITEMS = 5;
 export const MAX_CONCURRENCY = 1;
 export const BATCH_TIMEOUT_MS = 60_000;
 export const MAX_RETRIES = 2;

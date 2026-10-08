@@ -1,4 +1,10 @@
-import { MAX_CHARS_PER_BATCH, MAX_CONCURRENCY, MAX_ITEMS_PER_BATCH, BLOCK_MAX_LENGTH } from '@/utils/constants';
+import {
+  BLOCK_MAX_LENGTH,
+  FIRST_BATCH_ITEMS,
+  MAX_CHARS_PER_BATCH,
+  MAX_CONCURRENCY,
+  MAX_ITEMS_PER_BATCH,
+} from '@/utils/constants';
 import { requestTranslateBatch } from '@/utils/messaging';
 import {
   hasRenderedTranslation,
@@ -9,7 +15,8 @@ import {
 import type { TextBlock } from '@/utils/types';
 
 /**
- * 分块翻译：切成批（≤20 条 / ≤3000 字符，超长块独立成批），
+ * 分块翻译：先译当前视口，再译视口下方，最后才补视口上方。
+ * 第一批最多 5 条，其余 ≤20 条 / ≤3000 字符，超长块独立成批。
  * 同一轮只发一批；background 里还有全局排队，智谱免费接口批与批之间另留空档。
  * isCancelled 为真时不再发送后续批（响应到达的结果仍会渲染）。
  */
@@ -41,17 +48,29 @@ async function translateOneBatch(
   onTranslated?: (sourceText: string, translated: string) => void,
   onFailed?: (sourceText: string) => void,
 ): Promise<void> {
+  const queued = batch.filter((block) => !block.hold);
   for (const block of batch) {
+    if (block.hold) {
+      if (block.state !== 'done') block.state = 'pending';
+      onFailed?.(block.sourceText);
+      continue;
+    }
     block.state = 'translating';
     showTranslatingPlaceholder(block);
   }
-  const response = await requestTranslateBatch(batch.map((block) => block.sourceText));
+  if (queued.length === 0) return;
+  const response = await requestTranslateBatch(queued.map((block) => block.sourceText));
 
   // 请求在途期间用户已关闭/重启翻译：丢弃结果，避免注入到已清理的页面
   if (isCancelled()) return;
 
   if (response.ok) {
-    batch.forEach((block, i) => {
+    queued.forEach((block, i) => {
+      if (block.hold) {
+        if (block.state !== 'done') block.state = 'pending';
+        onFailed?.(block.sourceText);
+        return;
+      }
       const result = response.results[i];
       if (result) {
         block.state = 'done';
@@ -67,7 +86,12 @@ async function translateOneBatch(
       }
     });
   } else {
-    for (const block of batch) {
+    for (const block of queued) {
+      if (block.hold) {
+        if (block.state !== 'done') block.state = 'pending';
+        onFailed?.(block.sourceText);
+        continue;
+      }
       block.state = 'failed';
       onFailed?.(block.sourceText);
       if (!block.host.isConnected || hasRenderedTranslation(block.host)) continue;
@@ -90,16 +114,15 @@ function makeBatches(blocks: TextBlock[]): TextBlock[][] {
     }
   };
 
-  for (const block of blocks) {
+  const itemLimit = () => (batches.length === 0 ? FIRST_BATCH_ITEMS : MAX_ITEMS_PER_BATCH);
+
+  for (const block of [...blocks].sort(byReadingOrder)) {
     if (block.sourceText.length > BLOCK_MAX_LENGTH) {
       flush();
       batches.push([block]); // 超长块独立成批
       continue;
     }
-    if (
-      current.length >= MAX_ITEMS_PER_BATCH ||
-      chars + block.sourceText.length > MAX_CHARS_PER_BATCH
-    ) {
+    if (current.length >= itemLimit() || chars + block.sourceText.length > MAX_CHARS_PER_BATCH) {
       flush();
     }
     current.push(block);
@@ -107,4 +130,26 @@ function makeBatches(blocks: TextBlock[]): TextBlock[][] {
   }
   flush();
   return batches;
+}
+
+/** 当前屏幕优先，否则用户要先等完已经滚过去的正文 */
+function byReadingOrder(a: TextBlock, b: TextBlock): number {
+  const zoneDelta = zoneOf(a.host) - zoneOf(b.host);
+  if (zoneDelta !== 0) return zoneDelta;
+  return visualTop(a.host) - visualTop(b.host);
+}
+
+/** 0 视口内，1 视口下方，2 视口上方 */
+function zoneOf(el: Element): number {
+  if (!el.isConnected) return 3;
+  const rect = el.getBoundingClientRect();
+  if (rect.bottom > 0 && rect.top < window.innerHeight) return 0;
+  if (rect.top >= window.innerHeight) return 1;
+  return 2;
+}
+
+function visualTop(el: Element): number {
+  if (!el.isConnected) return Number.POSITIVE_INFINITY;
+  const rect = el.getBoundingClientRect();
+  return rect.top + window.scrollY;
 }

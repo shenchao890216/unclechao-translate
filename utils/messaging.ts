@@ -1,8 +1,11 @@
 import type {
   ContentMessage,
+  FetchYouTubeCaptionsRequest,
+  FetchYouTubeCaptionsResponse,
   TranslateBatchRequest,
   TranslateBatchResponse,
   TranslateError,
+  TranslateKind,
 } from './types';
 
 /**
@@ -13,8 +16,11 @@ import type {
 let translateTail: Promise<unknown> = Promise.resolve();
 
 /** content script → background：请求翻译一批文本（划词=单项数组，整页=N 项数组） */
-export function requestTranslateBatch(items: string[]): Promise<TranslateBatchResponse> {
-  const run = translateTail.then(() => sendTranslateBatch(items));
+export function requestTranslateBatch(
+  items: string[],
+  kind: TranslateKind = 'page',
+): Promise<TranslateBatchResponse> {
+  const run = translateTail.then(() => sendTranslateBatch(items, kind));
   translateTail = run.then(
     () => undefined,
     () => undefined,
@@ -22,11 +28,41 @@ export function requestTranslateBatch(items: string[]): Promise<TranslateBatchRe
   return run;
 }
 
-async function sendTranslateBatch(items: string[]): Promise<TranslateBatchResponse> {
+/** 网页字幕地址是空的，改由 background 下载可用正文 */
+export async function requestYouTubeCaptions(
+  videoId: string,
+  languageCode: string,
+): Promise<FetchYouTubeCaptionsResponse> {
   let lastMessage = 'background 无响应';
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const request: TranslateBatchRequest = { type: 'TRANSLATE_BATCH', items };
+      const request: FetchYouTubeCaptionsRequest = {
+        type: 'FETCH_YOUTUBE_CAPTIONS',
+        videoId,
+        languageCode,
+      };
+      const response = (await browser.runtime.sendMessage(request)) as
+        | FetchYouTubeCaptionsResponse
+        | undefined;
+      if (!response) return { ok: false, error: 'background 无响应' };
+      return response;
+    } catch (err) {
+      lastMessage = err instanceof Error ? err.message : String(err);
+      if (attempt === 0 && isClosedChannel(lastMessage)) continue;
+      return { ok: false, error: lastMessage };
+    }
+  }
+  return { ok: false, error: lastMessage };
+}
+
+async function sendTranslateBatch(
+  items: string[],
+  kind: TranslateKind,
+): Promise<TranslateBatchResponse> {
+  let lastMessage = 'background 无响应';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const request: TranslateBatchRequest = { type: 'TRANSLATE_BATCH', items, kind };
       const response = (await browser.runtime.sendMessage(request)) as
         | TranslateBatchResponse
         | undefined;
@@ -56,13 +92,26 @@ export async function getActiveTab(): Promise<Browser.tabs.Tab | undefined> {
   return focused ?? current;
 }
 
+/** 整页翻译要进到正文 iframe；设置和字幕只作用于顶层页面 */
+function reachesEveryFrame(message: ContentMessage): boolean {
+  return message.type === 'TOGGLE_PAGE_TRANSLATE' || message.type === 'SET_VIEW_MODE';
+}
+
 /** 向指定标签页的 content script 发消息，失败（如 chrome:// 页无 content script）返回 false */
 export async function sendMessageToTab(
   tabId: number,
   message: ContentMessage,
 ): Promise<boolean> {
+  return sendMessageToFrame(tabId, message, 0);
+}
+
+async function sendMessageToFrame(
+  tabId: number,
+  message: ContentMessage,
+  frameId: number,
+): Promise<boolean> {
   try {
-    await browser.tabs.sendMessage(tabId, message);
+    await browser.tabs.sendMessage(tabId, message, { frameId });
     return true;
   } catch {
     return false;
@@ -73,19 +122,39 @@ export async function sendMessageToTab(
 export async function sendToActiveTab(message: ContentMessage): Promise<boolean> {
   const tab = await getActiveTab();
   if (!tab?.id) return false;
-  if (await sendMessageToTab(tab.id, message)) return true;
-  if (!(await injectContentScript(tab.id))) return false;
-  if (await sendMessageToTab(tab.id, message)) return true;
-  // 脚本是异步启动的，监听器刚注册时再补一次
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  return sendMessageToTab(tab.id, message);
+  const frameIds = reachesEveryFrame(message) ? await listFrameIds(tab.id) : [0];
+  return deliverToFrames(tab.id, message, frameIds);
 }
 
-/** 把 content script 注入到指定标签页（已打开的页面在扩展重载后常常没有脚本） */
-export async function injectContentScript(tabId: number): Promise<boolean> {
+async function deliverToFrames(
+  tabId: number,
+  message: ContentMessage,
+  frameIds: number[],
+): Promise<boolean> {
+  const results = await Promise.all(frameIds.map((frameId) => sendMessageToFrame(tabId, message, frameId)));
+  const missing = frameIds.filter((_, index) => !results[index]);
+  if (missing.length === 0) return true;
+  if (!(await injectContentScript(tabId, missing))) return results.some(Boolean);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const retried = await Promise.all(missing.map((frameId) => sendMessageToFrame(tabId, message, frameId)));
+  return results.some(Boolean) || retried.some(Boolean);
+}
+
+async function listFrameIds(tabId: number): Promise<number[]> {
+  try {
+    const frames = await browser.webNavigation.getAllFrames({ tabId });
+    const ids = (frames ?? []).map((frame) => frame.frameId);
+    return ids.length > 0 ? ids : [0];
+  } catch {
+    return [0];
+  }
+}
+
+/** 把 content script 注入到指定框架（已打开的页面在扩展重载后常常没有脚本） */
+export async function injectContentScript(tabId: number, frameIds: number[] = [0]): Promise<boolean> {
   try {
     await browser.scripting.executeScript({
-      target: { tabId },
+      target: { tabId, frameIds },
       files: ['content-scripts/content.js'],
     });
     return true;
@@ -98,7 +167,13 @@ export async function injectContentScript(tabId: number): Promise<boolean> {
 export function isContentMessage(msg: unknown): msg is ContentMessage {
   if (typeof msg !== 'object' || msg === null) return false;
   const type = (msg as { type?: unknown }).type;
-  if (type === 'TOGGLE_PAGE_TRANSLATE' || type === 'TOGGLE_SETTINGS') return true;
+  if (
+    type === 'TOGGLE_PAGE_TRANSLATE' ||
+    type === 'TOGGLE_VIDEO_TRANSLATE' ||
+    type === 'TOGGLE_SETTINGS'
+  ) {
+    return true;
+  }
   if (
     type === 'SET_VIEW_MODE' &&
     ['dual', 'source', 'target'].includes((msg as { mode?: unknown }).mode as string)

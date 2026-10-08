@@ -114,18 +114,34 @@ function placeSlot(host: Element, node: HTMLElement): void {
 
 function slotOf(host: Element): HTMLElement | null {
   if (host.tagName === 'TD' || host.tagName === 'TH') {
-    return host.querySelector(':scope > .uct-tl, :scope > .uct-failed, :scope > .uct-pending');
+    const found = host.querySelector(':scope > [data-uct-target-id]');
+    return found instanceof HTMLElement ? found : null;
   }
   const next = host.nextElementSibling;
-  if (!(next instanceof HTMLElement)) return null;
-  if (
-    next.classList.contains(TARGET_CLASS) ||
-    next.classList.contains('uct-failed') ||
-    next.classList.contains(PENDING_CLASS)
-  ) {
-    return next;
-  }
-  return null;
+  if (!(next instanceof HTMLElement) || next.dataset.uctTargetId === undefined) return null;
+  return next;
+}
+
+/** 划词占住这段时，撤掉整页的「翻译中…」，避免同一段挂两份译文 */
+export function removePendingPageSlot(host: Element): void {
+  const slot = slotOf(host);
+  if (!slot || !slot.classList.contains(PENDING_CLASS)) return;
+  slot.remove();
+  unmarkHost(host);
+}
+
+/** 划词已经给出译文时，撤掉整页译文，只留划词那一份 */
+export function removePageSlot(host: Element): void {
+  const slot = slotOf(host);
+  if (!slot) return;
+  slot.remove();
+  unmarkHost(host);
+}
+
+function unmarkHost(host: Element): void {
+  if (slotOf(host)) return;
+  delete (host as HTMLElement).dataset.uctSrcId;
+  host.classList.remove(HOST_CLASS);
 }
 
 function markHost(block: TextBlock): void {
